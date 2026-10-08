@@ -35,7 +35,10 @@
       "middlewares/*": ["./src/middlewares/*"],
       "@configs/*": ["./src/configs/*"],
       "@services/*": ["./src/services/*"],
-      "@db/*": ["./src/db/*"]
+      "@schemas/*" : ["./src/schemas/*"],
+      "@middlewares/*" : ["./src/middlewares/*"]
     }
-  }
+  },
+  "include" : ["src"],
+  "exclude" : ["node_modules"]
 }

@@ -113,78 +113,6 @@ must never be stored
 
 ---
 
-### Important changes from the original design
-
-#### `password` → `password_hash`
-
-The database must never contain a plaintext password.
-
-The backend should hash passwords using a suitable password-hashing
-algorithm such as Argon2id or bcrypt before storage.
-
-#### `todo_ref` removed
-
-The original PostgreSQL design contained:
-
-```json
-"todo_ref": [
-    {
-        "todo_name": "name of the todo",
-        "status": "status"
-    }
-]
-```
-
-This should **not** be stored in PostgreSQL.
-
-MongoDB already owns Todo data. Maintaining a second Todo representation
-in PostgreSQL would create duplicated state and synchronization
-problems.
-
-The relationship is instead:
-
-```text
-PostgreSQL users.public_id
-            |
-            | referenced logically
-            v
-MongoDB todos.userPublicId
-```
-
-There is no cross-database foreign-key constraint.
-
----
-
-# 4. Optional PostgreSQL Authentication Tables
-
-If refresh-token/session authentication is implemented, authentication
-state should be stored separately from the `users` table.
-
-## 4.1 Refresh Sessions
-
-```sql
-CREATE TABLE refresh_sessions (
-    id BIGSERIAL PRIMARY KEY,
-    public_id UUID NOT NULL UNIQUE DEFAULT gen_random_uuid(),
-
-    user_id BIGINT NOT NULL REFERENCES users(id),
-
-    token_hash TEXT NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL,
-    revoked_at TIMESTAMPTZ,
-
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-```
-
-The actual refresh token should not be stored in plaintext. Store a hash
-and compare against the supplied token.
-
-Access tokens should be short-lived.
-
----
-
 # 5. Push Notification Subscription Schema
 
 Because the application requires push notification functionality,
@@ -194,18 +122,20 @@ A recommended PostgreSQL table is:
 
 ```sql
 CREATE TABLE push_subscriptions (
-    id BIGSERIAL PRIMARY KEY,
-
-    user_id BIGINT NOT NULL REFERENCES users(id),
-
-    endpoint TEXT NOT NULL,
-    p256dh TEXT NOT NULL,
-    auth TEXT NOT NULL,
-
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    UNIQUE(user_id, endpoint)
+  "internal_id" bigserial PRIMARY KEY NOT NULL,
+	"user_public_id" uuid NOT NULL,
+	"endpoint" text NOT NULL,
+	"p256dh" text NOT NULL,
+	"auth" text NOT NULL,
+	"device_name" varchar(150),
+	"user_agent" text,
+	"is_active" boolean DEFAULT true NOT NULL,
+	"last_used_at" timestamp with time zone,
+	"expires_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"deleted_at" timestamp with time zone,
+	CONSTRAINT "notifications_endpoint_unique" UNIQUE("endpoint")
 );
 ```
 
@@ -308,16 +238,13 @@ The main Todo access pattern is retrieving Todos belonging to one user.
 Recommended indexes:
 
 ```javascript
-db.todos.createIndex({
-  userPublicId: 1,
-  createdAt: -1,
-});
+TodoSchema.index({ userPublicId: 1, createdAt: -1 });
 ```
 
 For status filtering:
 
 ```javascript
-db.todos.createIndex({
+TodoSchema.index({
   userPublicId: 1,
   status: 1,
   createdAt: -1,
