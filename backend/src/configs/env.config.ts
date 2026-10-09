@@ -8,6 +8,9 @@ interface ENV {
   NODE_ENV: string;
   JWT_ACCESS: string;
   JWT_REFRESH: string;
+  REDIS_PORT: number;
+  REDIS_HOST: string;
+  REDIS_PASSWORD: string;
 }
 
 const env: ENV = {
@@ -17,6 +20,9 @@ const env: ENV = {
   NODE_ENV: process.env.NODE_ENV!,
   JWT_ACCESS: process.env.JWT_ACCESS!,
   JWT_REFRESH: process.env.JWT_REFRESH!,
+  REDIS_PORT: Number(process.env.REDIS_PORT),
+  REDIS_HOST: process.env.REDIS_HOST!,
+  REDIS_PASSWORD: process.env.REDIS_PASSWORD!,
 };
 
 export default env;

@@ -20,6 +20,7 @@
     "drizzle-orm": "^0.45.3",
     "express": "^5.2.1",
     "helmet": "^8.3.0",
+    "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "module-alias": "^2.3.4",
     "mongoose": "^9.11.1",
@@ -35,8 +36,8 @@
     "@types/pg": "^8.23.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
-    "drizzle-kit": "^0.31.11",
-    "tsc-alias": "^1.9.7",
+    "drizzle-kit": "^0.18.1",
+    "tsc-alias": "^1.0.11",
     "tsx": "^4.23.15"
   }
 }

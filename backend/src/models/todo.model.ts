@@ -61,6 +61,14 @@ const TodoSchema = new Schema<ITodo>(
 
 TodoSchema.index({ userPublicId: 1, createdAt: -1 });
 
+TodoSchema.index(
+  { userPublicId: 1, topicName: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { deletedAt: null },
+  },
+);
+
 TodoSchema.index({
   userPublicId: 1,
   status: 1,

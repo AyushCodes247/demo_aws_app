@@ -70,6 +70,42 @@ class UserController {
       });
     },
   );
+
+  profile = asyncHandler(
+    async (
+      req: Request,
+      res: Response,
+      _next: NextFunction,
+    ): Promise<unknown> => {
+      return res.status(200).json({
+        success: true,
+        message: "profile fetched successfully.",
+        user: {
+          publicId: req.user!.publicId,
+          username: req.user!.username,
+          email: req.user!.email,
+          createdAt: req.user!.createdAt,
+        },
+      });
+    },
+  );
+
+  logout = asyncHandler(
+    async (
+      req: Request,
+      res: Response,
+      _next: NextFunction,
+    ): Promise<unknown> => {
+      const { publicId } = req.user!;
+
+      await UserService.logout(publicId);
+
+      return res.status(200).json({
+        success: true,
+        message: "logged out successfully.",
+      });
+    },
+  );
 }
 
 export default new UserController();
