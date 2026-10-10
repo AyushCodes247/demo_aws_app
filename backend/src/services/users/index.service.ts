@@ -27,6 +27,28 @@ export interface GlobalReturnDataType {
   refreshToken?: string;
 }
 
+const isDuplicateEmailError = (error: unknown): boolean => {
+  let current = error;
+
+  while (current instanceof Error) {
+    const databaseError = current as Error & {
+      code?: string;
+      constraint?: string;
+    };
+
+    if (
+      databaseError.code === "23505" &&
+      (!databaseError.constraint || databaseError.constraint.includes("email"))
+    ) {
+      return true;
+    }
+
+    current = databaseError.cause;
+  }
+
+  return false;
+};
+
 class UserService {
   async Register(registerData: Payload): Promise<GlobalReturnDataType> {
     const existingUser = await db.query.userTable.findFirst({
@@ -39,19 +61,29 @@ class UserService {
 
     const hashedPassword = await hashPassword(registerData.password);
 
-    const [user] = await db
-      .insert(userTable)
-      .values({
-        username: registerData.username!,
-        email: registerData.email,
-        passwordHash: hashedPassword,
-      })
-      .returning({
-        publicId: userTable.publicId,
-        username: userTable.username,
-        email: userTable.email,
-        createdAt: userTable.createdAt,
-      });
+    let user;
+
+    try {
+      [user] = await db
+        .insert(userTable)
+        .values({
+          username: registerData.username!,
+          email: registerData.email,
+          passwordHash: hashedPassword,
+        })
+        .returning({
+          publicId: userTable.publicId,
+          username: userTable.username,
+          email: userTable.email,
+          createdAt: userTable.createdAt,
+        });
+    } catch (error) {
+      if (isDuplicateEmailError(error)) {
+        throw new AppError("user already exists.", 409);
+      }
+
+      throw error;
+    }
 
     if (!user) {
       throw new AppError("failed to register user.", 500);

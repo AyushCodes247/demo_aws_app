@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
-import { asyncHandler } from "@utils/essential.util.js";
+import { asyncHandler, AppError } from "@utils/essential.util.js";
 import UserService from "@services/users/index.service.js";
 import env from "@configs/env.config.js";
 
@@ -13,6 +13,17 @@ class UserController {
       _next: NextFunction,
     ): Promise<unknown> => {
       const { username, email, password } = req.body;
+
+      if (
+        typeof username !== "string" ||
+        typeof email !== "string" ||
+        typeof password !== "string" ||
+        !username.trim() ||
+        !email.trim() ||
+        !password
+      ) {
+        throw new AppError("Invalid registration input.", 400);
+      }
 
       const { user, accessToken, refreshToken } = await UserService.Register({
         username,
@@ -46,6 +57,15 @@ class UserController {
       _next: NextFunction,
     ): Promise<unknown> => {
       const { email, password } = req.body;
+
+      if (
+        typeof email !== "string" ||
+        typeof password !== "string" ||
+        !email.trim() ||
+        !password
+      ) {
+        throw new AppError("Invalid login input.", 400);
+      }
 
       const { user, accessToken, refreshToken } = await UserService.login({
         email,

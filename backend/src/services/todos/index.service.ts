@@ -206,7 +206,7 @@ class ToDoService {
     const todo = await Todo.findOneAndUpdate(
       { _id: todoId, userPublicId, deletedAt: null },
       { $set: updates },
-      { new: true, runValidators: true },
+      { new: true, runValidators: true, returnDocument: "after" },
     ).lean();
 
     if (!todo) {
@@ -232,7 +232,7 @@ class ToDoService {
     const todo = await Todo.findOneAndUpdate(
       { _id: todoId, userPublicId, deletedAt: null },
       { $set: { status } },
-      { new: true, runValidators: true },
+      { new: true, runValidators: true, returnDocument: "after" },
     ).lean();
 
     if (!todo) {
@@ -250,7 +250,7 @@ class ToDoService {
     const todo = await Todo.findOneAndUpdate(
       { _id: todoId, userPublicId, deletedAt: null },
       { $set: { deletedAt: new Date() } },
-      { new: true },
+      { new: true, returnDocument: "after" },
     );
 
     if (!todo) {

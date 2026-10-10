@@ -25,8 +25,6 @@ export const globalErrorHandler: ErrorRequestHandler = (
     );
   }
 
-  console.error(error);
-
   const response: Record<string, unknown> = {
     success: false,
     status: error.status,

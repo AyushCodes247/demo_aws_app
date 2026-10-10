@@ -1,6 +1,7 @@
 import env from "@configs/env.config.js";
 import argon2 from "argon2";
 import jwt from "jsonwebtoken";
+import crypto from "node:crypto";
 
 export interface TokenPayload {
   publicId: string;
@@ -28,6 +29,7 @@ export const generateAccessToken = (payload: TokenPayload): string => {
     algorithm: "HS256",
     issuer: JWT_ISSUER,
     audience: JWT_AUDIENCE,
+    jwtid: crypto.randomUUID(),
   });
 };
 
@@ -37,6 +39,7 @@ export const generateRefreshToken = (payload: TokenPayload): string => {
     algorithm: "HS256",
     issuer: JWT_ISSUER,
     audience: JWT_AUDIENCE,
+    jwtid: crypto.randomUUID(),
   });
 };
 
