@@ -25,6 +25,8 @@ export const globalErrorHandler: ErrorRequestHandler = (
     );
   }
 
+  console.error("Error in app:", error);
+
   const response: Record<string, unknown> = {
     success: false,
     status: error.status,

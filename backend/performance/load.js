@@ -1,8 +1,11 @@
-
 import http from "k6/http";
 import { check, sleep } from "k6";
 
-const BASE_URL = __ENV.BASE_URL || "http://localhost:4000";
+const __ENV = {
+  BASE_URL: "http://localhost:4000",
+};
+
+const BASE_URL = __ENV.BASE_URL;
 const USERS_URL = `${BASE_URL}/api/v1/users`;
 const TODOS_URL = `${BASE_URL}/api/v1/todos`;
 
@@ -53,6 +56,8 @@ export const options = {
     checks: ["rate>0.99"],
   },
 };
+
+let __VU = 0;
 
 const getUser = () => USERS[(__VU - 1) % USERS.length];
 
@@ -129,6 +134,8 @@ export function userTodoWorkflow() {
   const profile = http.get(`${USERS_URL}/profile`, authParams);
   checkResponse("profile", profile, 200);
 
+  let __ITER = 0;
+
   const uniqueId = `${__VU}-${__ITER}-${Date.now()}`;
 
   const createTodo = http.post(
@@ -202,6 +209,7 @@ export function userTodoWorkflow() {
 }
 
 export function registrationLoad() {
+  let __ITER = 0;
   const uniqueId = `${Date.now()}-${__VU}-${__ITER}`;
   const email = `k6-${uniqueId}@example.com`;
   const username = `k6user${uniqueId}`.replace(/[^a-zA-Z0-9_-]/g, "");

@@ -42,7 +42,7 @@ const createResponse = () => {
 };
 
 const next: NextFunction = jest.fn(
-  (...args: unknown[]) => undefined,
+  (..._args: unknown[]) => undefined,
 ) as NextFunction;
 
 const invokeController = async (

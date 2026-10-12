@@ -7,8 +7,15 @@ import {
   generateRefreshToken,
   hashPassword,
   verifyHashPassword,
+  verifyRefreshToken as decodeRefreshToken,
 } from "@utils/auth.util.js";
-import { storeAccessToken, deleteAccssToken } from "./session.service.js";
+import {
+  storeAccessToken,
+  verifyRefreshToken as verifyStoredRefreshToken,
+  storeRefreshToken,
+  deleteAccessToken,
+  deleteRefreshToken,
+} from "./session.service.js";
 
 interface Payload {
   username?: string;
@@ -51,12 +58,18 @@ const isDuplicateEmailError = (error: unknown): boolean => {
 
 class UserService {
   async Register(registerData: Payload): Promise<GlobalReturnDataType> {
+    if (!registerData.username?.trim()) {
+      throw new AppError("Username is required.", 400);
+    }
+
+    const email = registerData.email.trim().toLowerCase();
+
     const existingUser = await db.query.userTable.findFirst({
-      where: eq(userTable.email, registerData.email),
+      where: eq(userTable.email, email),
     });
 
     if (existingUser) {
-      throw new AppError("user already exists.", 409);
+      throw new AppError("User already exists.", 409);
     }
 
     const hashedPassword = await hashPassword(registerData.password);
@@ -67,8 +80,8 @@ class UserService {
       [user] = await db
         .insert(userTable)
         .values({
-          username: registerData.username!,
-          email: registerData.email,
+          username: registerData.username.trim(),
+          email,
           passwordHash: hashedPassword,
         })
         .returning({
@@ -79,25 +92,26 @@ class UserService {
         });
     } catch (error) {
       if (isDuplicateEmailError(error)) {
-        throw new AppError("user already exists.", 409);
+        throw new AppError("User already exists.", 409);
       }
 
       throw error;
     }
 
     if (!user) {
-      throw new AppError("failed to register user.", 500);
+      throw new AppError("Failed to register user.", 500);
     }
 
-    const payload = {
+    const tokenPayload = {
       publicId: user.publicId,
       username: user.username,
     };
 
-    const accessToken = generateAccessToken(payload);
-    const refreshToken = generateRefreshToken(payload);
+    const accessToken = generateAccessToken(tokenPayload);
+    const refreshToken = generateRefreshToken(tokenPayload);
 
     await storeAccessToken(user.publicId, accessToken);
+    await storeRefreshToken(user.publicId, refreshToken);
 
     return {
       user,
@@ -107,12 +121,14 @@ class UserService {
   }
 
   async login(loginData: Payload): Promise<GlobalReturnDataType> {
+    const email = loginData.email.trim().toLowerCase();
+
     const user = await db.query.userTable.findFirst({
-      where: eq(userTable.email, loginData.email),
+      where: eq(userTable.email, email),
     });
 
     if (!user) {
-      throw new AppError("invalid email or password.", 401);
+      throw new AppError("Invalid email or password.", 401);
     }
 
     const isValidPassword = await verifyHashPassword(
@@ -121,25 +137,24 @@ class UserService {
     );
 
     if (!isValidPassword) {
-      throw new AppError("invalid email or password.", 401);
+      throw new AppError("Invalid email or password.", 401);
     }
 
     await db
       .update(userTable)
-      .set({
-        lastLoginAt: new Date(),
-      })
+      .set({ lastLoginAt: new Date() })
       .where(eq(userTable.publicId, user.publicId));
 
-    const payload = {
+    const tokenPayload = {
       publicId: user.publicId,
       username: user.username,
     };
 
-    const accessToken = generateAccessToken(payload);
-    const refreshToken = generateRefreshToken(payload);
+    const accessToken = generateAccessToken(tokenPayload);
+    const refreshToken = generateRefreshToken(tokenPayload);
 
     await storeAccessToken(user.publicId, accessToken);
+    await storeRefreshToken(user.publicId, refreshToken);
 
     return {
       user: {
@@ -153,8 +168,75 @@ class UserService {
     };
   }
 
-  async logout(publicId: string): Promise<unknown> {
-    return await deleteAccssToken(publicId);
+  async refresh(refreshToken: string): Promise<GlobalReturnDataType> {
+    if (!refreshToken) {
+      throw new AppError("Refresh token is required.", 401);
+    }
+
+    // First verify the JWT signature and expiry.
+    const decoded = await decodeRefreshToken(refreshToken);
+
+    if (
+      !decoded ||
+      typeof decoded.publicId !== "string" ||
+      typeof decoded.username !== "string"
+    ) {
+      throw new AppError("Invalid refresh token.", 401);
+    }
+
+    // Then verify that this token is still the active Redis session.
+    const isStoredTokenValid = await verifyStoredRefreshToken(
+      decoded.publicId,
+      refreshToken,
+    );
+
+    if (!isStoredTokenValid) {
+      throw new AppError("Refresh session expired or revoked.", 401);
+    }
+
+    const user = await db.query.userTable.findFirst({
+      where: eq(userTable.publicId, decoded.publicId),
+      columns: {
+        publicId: true,
+        username: true,
+        email: true,
+        createdAt: true,
+      },
+    });
+
+    if (!user) {
+      await Promise.all([
+        deleteAccessToken(decoded.publicId),
+        deleteRefreshToken(decoded.publicId),
+      ]);
+
+      throw new AppError("User no longer exists.", 401);
+    }
+
+    const tokenPayload = {
+      publicId: user.publicId,
+      username: user.username,
+    };
+
+    const newAccessToken = generateAccessToken(tokenPayload);
+    const newRefreshToken = generateRefreshToken(tokenPayload);
+
+    // Rotate the refresh token and replace the access-token session.
+    await storeRefreshToken(user.publicId, newRefreshToken);
+    await storeAccessToken(user.publicId, newAccessToken);
+
+    return {
+      user,
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+    };
+  }
+
+  async logout(publicId: string): Promise<void> {
+    await Promise.all([
+      deleteAccessToken(publicId),
+      deleteRefreshToken(publicId),
+    ]);
   }
 }
 

@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { Link } from "react-router";
-import { Eye, EyeOff } from "lucide-react";
+import { Link, useNavigate } from "react-router";
+import { Eye, EyeOff, LoaderCircle } from "lucide-react";
+
+import { registerUser } from "../../../api/userApi";
+import { useAppDispatch, useAppSelector } from "../../../hooks/appHook";
+import { clearError } from "../../../slices/userSlice";
+import { SuccessToast } from "../../ui/StateComponents";
 
 type RegisterFormData = {
   username: string;
@@ -11,10 +16,18 @@ type RegisterFormData = {
 
 const Register = () => {
   const [showPassword, setShowPassword] = useState(false);
+  const [registerSucceeded, setRegisterSucceeded] = useState(false);
+
+  const dispatch = useAppDispatch();
+  const navigate = useNavigate();
+
+  const { loading, error } = useAppSelector((state) => state.user);
 
   const {
     register,
     handleSubmit,
+    setError,
+    clearErrors,
     formState: { errors, isSubmitting },
   } = useForm<RegisterFormData>({
     mode: "onBlur",
@@ -26,8 +39,32 @@ const Register = () => {
   });
 
   const onSubmit = async (data: RegisterFormData) => {
-    console.log(data);
+    dispatch(clearError());
+    clearErrors();
+
+    try {
+      await dispatch(registerUser(data)).unwrap();
+
+      setRegisterSucceeded(true);
+
+      window.setTimeout(() => {
+        navigate("/dashboard", { replace: true });
+      }, 900);
+    } catch (error: unknown) {
+      const message =
+        typeof error === "string"
+          ? error
+          : "Registration failed. Please try again.";
+
+      setError("root", {
+        type: "server",
+        message,
+      });
+    }
   };
+
+  const isBusy = isSubmitting || loading || registerSucceeded;
+  const formError = errors.root?.message ?? error;
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#09090b] px-4 py-10 font-inter text-[#fafafa] selection:bg-violet-500/30 sm:px-6">
@@ -63,14 +100,32 @@ const Register = () => {
             </p>
           </header>
 
+          {registerSucceeded && (
+            <SuccessToast message="Account created successfully!" visible={true} />
+          )}
+
+          {formError && !registerSucceeded && (
+            <div
+              role="alert"
+              className="mb-5 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400"
+            >
+              {formError}
+            </div>
+          )}
+
           <form
             id="fRegister"
             onSubmit={handleSubmit(onSubmit)}
             noValidate
             className="space-y-5"
           >
-            <fieldset className="min-w-0 space-y-5">
-              <legend className="sr-only">Create your Tasklane account</legend>
+            <fieldset
+              disabled={isBusy}
+              className="min-w-0 space-y-5 disabled:opacity-80"
+            >
+              <legend className="sr-only">
+                Create your Tasklane account
+              </legend>
 
               <div className="space-y-2">
                 <label
@@ -144,7 +199,9 @@ const Register = () => {
                   autoComplete="email"
                   placeholder="you@example.com"
                   aria-invalid={Boolean(errors.email)}
-                  aria-describedby={errors.email ? "rEmailError" : undefined}
+                  aria-describedby={
+                    errors.email ? "rEmailError" : undefined
+                  }
                 />
 
                 {errors.email && (
@@ -172,7 +229,8 @@ const Register = () => {
                       required: "Password is required",
                       minLength: {
                         value: 8,
-                        message: "Password must contain at least 8 characters",
+                        message:
+                          "Password must contain at least 8 characters",
                       },
                     })}
                     className={`h-12 w-full rounded-xl border bg-[#09090b] px-4 pr-12 text-sm text-white outline-none transition placeholder:text-zinc-600 hover:border-white/20 focus:ring-4 focus:ring-violet-500/10 ${
@@ -192,7 +250,9 @@ const Register = () => {
 
                   <button
                     type="button"
-                    onClick={() => setShowPassword((visible) => !visible)}
+                    onClick={() =>
+                      setShowPassword((visible) => !visible)
+                    }
                     className="absolute inset-y-0 right-3 flex items-center justify-center text-zinc-400 transition hover:text-white focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
                     aria-label={
                       showPassword ? "Hide password" : "Show password"
@@ -221,11 +281,23 @@ const Register = () => {
             </fieldset>
 
             <button
-              className="flex h-12 w-full items-center justify-center rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white shadow-lg shadow-violet-600/15 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-violet-500/30 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white shadow-lg shadow-violet-600/15 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-violet-500/30 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
               type="submit"
-              disabled={isSubmitting}
+              disabled={isBusy}
             >
-              {isSubmitting ? "Creating account..." : "Create account"}
+              {isBusy && !registerSucceeded && (
+                <LoaderCircle
+                  size={18}
+                  className="animate-spin"
+                  aria-hidden="true"
+                />
+              )}
+
+              {registerSucceeded
+                ? "Account created!"
+                : isBusy
+                  ? "Creating account..."
+                  : "Create account"}
             </button>
           </form>
 

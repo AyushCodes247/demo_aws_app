@@ -1,7 +1,11 @@
 import http from "k6/http";
 import { check, sleep } from "k6";
 
-const BASE_URL = __ENV.BASE_URL || "http://localhost:4000";
+const __ENV = {
+  BASE_URL: "http://localhost:4000",
+};
+
+const BASE_URL = __ENV.BASE_URL;
 const USERS_URL = `${BASE_URL}/api/v1/users`;
 const TODOS_URL = `${BASE_URL}/api/v1/todos`;
 
@@ -44,6 +48,7 @@ export const options = {
   },
 };
 
+let __VU = 0;
 const getUser = () => USERS[(__VU - 1) % USERS.length];
 
 const readJson = (response) => {
@@ -115,6 +120,7 @@ export function authenticatedWorkflow() {
   }
 
   const params = authParams(token);
+  let __ITER = 0;
   const uniqueId = `${__VU}-${__ITER}-${Date.now()}`;
 
   const profile = http.get(`${USERS_URL}/profile`, params);

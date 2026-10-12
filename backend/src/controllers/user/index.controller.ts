@@ -14,13 +14,17 @@ class UserController {
     ): Promise<unknown> => {
       const { username, email, password } = req.body;
 
+      const isValidEmail = (value: string): boolean =>
+        /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+
       if (
         typeof username !== "string" ||
         typeof email !== "string" ||
         typeof password !== "string" ||
         !username.trim() ||
         !email.trim() ||
-        !password
+        !password ||
+        !isValidEmail(email)
       ) {
         throw new AppError("Invalid registration input.", 400);
       }
@@ -56,7 +60,13 @@ class UserController {
       res: Response,
       _next: NextFunction,
     ): Promise<unknown> => {
-      const { email, password } = req.body;
+      const body: unknown = req.body;
+
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        throw new AppError("A valid JSON request body is required.", 400);
+      }
+
+      const { email, password } = body as Record<string, unknown>;
 
       if (
         typeof email !== "string" ||
@@ -123,6 +133,37 @@ class UserController {
       return res.status(200).json({
         success: true,
         message: "logged out successfully.",
+      });
+    },
+  );
+
+  refresh = asyncHandler(
+    async (
+      req: Request,
+      res: Response,
+      _next: NextFunction,
+    ): Promise<unknown> => {
+      const refreshToken = req.cookies?.todo_cookie;
+
+      if (typeof refreshToken !== "string" || !refreshToken) {
+        throw new AppError("Refresh session required.", 401);
+      }
+
+      const result = await UserService.refresh(refreshToken);
+
+      res.cookie(REFRESH_COOKIE, result.refreshToken, {
+        httpOnly: true,
+        secure: env.NODE_ENV === "production",
+        sameSite: env.NODE_ENV === "production" ? "none" : "lax",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+        path: "/",
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Session refreshed successfully.",
+        user: result.user,
+        accessToken: result.accessToken,
       });
     },
   );

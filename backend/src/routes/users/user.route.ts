@@ -12,4 +12,6 @@ router.post("/logout", auth, UserController.logout);
 
 router.get("/profile", auth, UserController.profile);
 
+router.post("/refresh", UserController.refresh);
+
 export default router;

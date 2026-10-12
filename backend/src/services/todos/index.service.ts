@@ -53,7 +53,7 @@ class ToDoService {
     }
   }
 
-  private toResponse(todo: any): TodoResponse {
+  private toResponse(todo): TodoResponse {
     return {
       id: String(todo._id),
       topicName: todo.topicName,
@@ -206,7 +206,7 @@ class ToDoService {
     const todo = await Todo.findOneAndUpdate(
       { _id: todoId, userPublicId, deletedAt: null },
       { $set: updates },
-      { new: true, runValidators: true, returnDocument: "after" },
+      { runValidators: true, returnDocument: "after" },
     ).lean();
 
     if (!todo) {
@@ -232,7 +232,7 @@ class ToDoService {
     const todo = await Todo.findOneAndUpdate(
       { _id: todoId, userPublicId, deletedAt: null },
       { $set: { status } },
-      { new: true, runValidators: true, returnDocument: "after" },
+      { runValidators: true, returnDocument: "after" },
     ).lean();
 
     if (!todo) {
@@ -250,7 +250,7 @@ class ToDoService {
     const todo = await Todo.findOneAndUpdate(
       { _id: todoId, userPublicId, deletedAt: null },
       { $set: { deletedAt: new Date() } },
-      { new: true, returnDocument: "after" },
+      { returnDocument: "after" },
     );
 
     if (!todo) {

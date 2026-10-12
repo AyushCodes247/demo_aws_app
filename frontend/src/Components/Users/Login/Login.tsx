@@ -1,21 +1,30 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { Eye, EyeOff } from "lucide-react";
 
-type LoginFormData = {
-  email: string;
-  password: string;
-};
+import { useAppDispatch, useAppSelector } from "../../../hooks/appHook";
+import { clearError } from "../../../slices/userSlice";
+import { loginUser, type LoginInput } from "../../../api/userApi";
+import { SuccessToast } from "../../ui/StateComponents";
 
 const Login = () => {
   const [showPassword, setShowPassword] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [loginSucceeded, setLoginSucceeded] = useState(false);
+
+  const dispatch = useAppDispatch();
+  const navigate = useNavigate();
+
+  const { loading, error } = useAppSelector((state) => state.user);
 
   const {
     register,
     handleSubmit,
+    setError,
+    clearErrors,
     formState: { errors, isSubmitting },
-  } = useForm<LoginFormData>({
+  } = useForm<LoginInput>({
     mode: "onBlur",
     defaultValues: {
       email: "",
@@ -23,9 +32,37 @@ const Login = () => {
     },
   });
 
-  const onSubmit = async (data: LoginFormData) => {
-    console.log(data);
+  useEffect(() => {
+    if (!loginSucceeded) return;
+
+    const timeoutId = window.setTimeout(() => {
+      navigate("/dashboard", { replace: true });
+    }, 900);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [loginSucceeded, navigate]);
+
+  const onSubmit = async (data: LoginInput) => {
+    clearErrors();
+    dispatch(clearError());
+    setShowSuccess(false);
+    setLoginSucceeded(false);
+
+    try {
+      await dispatch(loginUser(data)).unwrap();
+      setShowSuccess(true);
+      setLoginSucceeded(true);
+    } catch (error: unknown) {
+      const message =
+        typeof error === "string"
+          ? error
+          : "Unable to sign in. Please try again.";
+
+      setError("root", { message });
+    }
   };
+
+  const formError = errors.root?.message ?? error;
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#09090b] px-4 py-10 font-inter text-[#fafafa] selection:bg-violet-500/30 sm:px-6">
@@ -67,7 +104,10 @@ const Login = () => {
             noValidate
             className="space-y-5"
           >
-            <fieldset className="min-w-0 space-y-5">
+            <fieldset
+              disabled={isSubmitting || loading || loginSucceeded}
+              className="min-w-0 space-y-5 disabled:opacity-80"
+            >
               <legend className="sr-only">Sign in to Tasklane</legend>
 
               <div className="space-y-2">
@@ -166,12 +206,33 @@ const Login = () => {
               </div>
             </fieldset>
 
+            {formError && (
+              <p
+                role="alert"
+                className="rounded-lg border border-[#E5766F]/20 bg-[#E5766F]/10 px-3 py-2.5 text-sm leading-5 text-[#E5766F]"
+              >
+                {formError}
+              </p>
+            )}
+
             <button
-              className="flex h-12 w-full items-center justify-center rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white shadow-lg shadow-violet-600/15 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-violet-500/30 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white shadow-lg shadow-violet-600/15 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-violet-500/30 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
               type="submit"
-              disabled={isSubmitting}
+              disabled={isSubmitting || loading || loginSucceeded}
             >
-              {isSubmitting ? "Signing in..." : "Sign in"}
+              {isSubmitting || loading ? (
+                <>
+                  <span
+                    aria-hidden="true"
+                    className="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white motion-reduce:animate-none"
+                  />
+                  Signing in...
+                </>
+              ) : loginSucceeded ? (
+                "Signed in successfully"
+              ) : (
+                "Sign in"
+              )}
             </button>
           </form>
 
@@ -186,6 +247,12 @@ const Login = () => {
           </footer>
         </section>
       </section>
+
+      <SuccessToast
+        visible={showSuccess}
+        message="Welcome back! Login successful."
+        onClose={() => setShowSuccess(false)}
+      />
     </main>
   );
 };

@@ -11,6 +11,7 @@ interface ENV {
   REDIS_PORT: number;
   REDIS_HOST: string;
   REDIS_PASSWORD: string;
+  CORS_ORIGIN: string;
 }
 
 const env: ENV = {
@@ -23,6 +24,7 @@ const env: ENV = {
   REDIS_PORT: Number(process.env.REDIS_PORT),
   REDIS_HOST: process.env.REDIS_HOST!,
   REDIS_PASSWORD: process.env.REDIS_PASSWORD!,
+  CORS_ORIGIN: process.env.CORS_ORIGIN!,
 };
 
 export default env;
