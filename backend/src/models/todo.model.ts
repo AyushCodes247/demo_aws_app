@@ -1,8 +1,9 @@
-import { Schema, model } from "mongoose";
+import { Schema, model, Types } from "mongoose";
 
 export type StatusEnum = "Pending" | "Processing" | "Completed";
 
 export interface ITodo {
+  _id: Types.ObjectId;
   userPublicId: string;
   topicName: string;
   description: string;
@@ -10,6 +11,8 @@ export interface ITodo {
   dueAt: Date | null;
   reminderAt: Date | null;
   deletedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 const TodoSchema = new Schema<ITodo>(

@@ -70,7 +70,6 @@ const auth = asyncHandler(
         publicId: true,
         username: true,
         email: true,
-        isVerified: true,
         createdAt: true,
       },
     });

@@ -1,1406 +1,508 @@
-# Todo Application --- API Design
+# Todo API: Frontend Integration Guide
 
-## 1. Document Purpose
+This guide documents the API contract currently implemented by the backend and the conventions the frontend should follow when integrating with it. It is intended for browser-based clients, including the React application in `frontend/`.
 
-This document defines the API contracts for the Todo application.
+> **Implemented API vs. roadmap:** This document describes the routes that are registered today. Push-subscription endpoints, WebSocket events, pagination, list filters, and sorting are not currently exposed by the backend. Do not build a client integration against those proposed features until corresponding routes and contracts are implemented.
 
-The API is responsible for:
+## 1. Quick reference
 
-- User registration and authentication.
-- User profile management.
-- Todo creation and management.
-- Todo status management.
-- Todo statistics.
-- Push notification subscriptions.
-- Realtime Todo updates through WebSocket.
-- Authentication and authorization.
-- Cache and realtime coordination through Redis.
+### Base URL
 
-The backend is implemented using:
+All routes are mounted under `/api/v1`. Configure the frontend's `VITE_BACKEND_URI` with the full origin and API prefix, for example:
 
-- **Node.js**
-- **TypeScript**
-- **REST API**
-- **WebSocket**
-- **PostgreSQL**
-- **MongoDB**
-- **Redis**
-
-The frontend consumes the API using:
-
-- **React**
-- **Redux Toolkit**
-- **RTK Query**
-
----
-
-# 2. API Architecture
-
-```text
-                         React Application
-                                |
-                    Redux Toolkit / RTK Query
-                                |
-                  +-------------+-------------+
-                  |                           |
-                REST                      WebSocket
-                  |                           |
-                  +-------------+-------------+
-                                |
-                         Node.js Backend
-                         TypeScript API
-                                |
-             +------------------+------------------+
-             |                  |                  |
-             v                  v                  v
-        PostgreSQL          MongoDB              Redis
-        User/Auth           Todo Data         Cache/PubSub
-````
-
----
-
-# 3. API Base URL
-
-All REST APIs are versioned.
-
-```text
-/api/v1
+```dotenv
+VITE_BACKEND_URI=http://localhost:3000/api/v1
 ```
 
-Example:
+In production, use the HTTPS API origin with the same `/api/v1` suffix. The frontend Axios client appends route paths such as `/users/login` and `/todos` to this value.
 
-```text
-POST /api/v1/auth/register
+### Routes
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `POST` | `/users/register` | Public | Create an account |
+| `POST` | `/users/login` | Public | Sign in |
+| `POST` | `/users/refresh` | Refresh cookie | Renew the session and rotate tokens |
+| `GET` | `/users/profile` | Access token | Fetch the current user |
+| `POST` | `/users/logout` | Access token | Revoke the current session |
+| `POST` | `/todos` | Access token | Create a Todo |
+| `GET` | `/todos` | Access token | List the current user's Todos |
+| `GET` | `/todos/stats` | Access token | Fetch Todo counts |
+| `GET` | `/todos/:todoId` | Access token | Fetch one Todo |
+| `PATCH` | `/todos/:todoId` | Access token | Edit Todo fields |
+| `PATCH` | `/todos/:todoId/status` | Access token | Change Todo status |
+| `DELETE` | `/todos/:todoId/delete` | Access token | Soft-delete a Todo |
+
+Use `/api/v1` in the configured base URL; do not add it again to individual route paths.
+
+## 2. Request and response conventions
+
+- Send JSON request bodies with `Content-Type: application/json`.
+- Successful responses include `success: true` and a human-readable `message`. Resource fields are top-level siblings (for example, `user`, `todo`, `todos`, or `stats`); they are **not** wrapped in a `data` property.
+- An error response includes `success: false` and `message`. In non-production environments it also includes an `error` object with diagnostic details. Do not rely on that development-only object in the UI.
+- Dates are serialized as ISO 8601 strings. A nullable date can be `null`.
+- Authentication and ownership are derived from the session. Never send a `userPublicId` to select an account or Todo owner.
+
+Example success envelope:
+
+```json
+{
+  "success": true,
+  "message": "todo fetched successfully.",
+  "todo": {}
+}
 ```
 
-Production example:
+Example production error envelope:
 
-```text
-https://api.example.com/api/v1
+```json
+{
+  "success": false,
+  "status": "fail",
+  "message": "Todo not found."
+}
 ```
 
----
+The backend currently does not return stable machine-readable `error.code` values. Frontend behavior should use the HTTP status and display the returned `message` where appropriate rather than parsing development-only error details.
 
-# 4. API Authentication
+## 3. Authentication and session lifecycle
 
-Protected endpoints use Bearer Token authentication.
+### Access token
+
+Register and login responses include an `accessToken`. Send it on every protected request:
 
 ```http
 Authorization: Bearer <accessToken>
 ```
 
-Example:
+Access tokens are short-lived (20 minutes) and are also checked against the active server-side session. A missing, expired, malformed, or revoked token returns `401 Unauthorized`.
+
+### Refresh-token cookie
+
+Registration and login also set an HTTP-only `todo_cookie` refresh-token cookie. The browser must retain and send this cookie on cross-origin requests. The cookie cannot be read from JavaScript; this is intentional.
+
+The refresh token is valid for up to seven days. The refresh route rotates it and sets a replacement cookie. The frontend's HTTP client should send credentials for all requests so registration/login can set the cookie and refresh can send it.
+
+The backend CORS origin is configured with `CORS_ORIGIN` and credentials are enabled. The deployed frontend origin must match that configuration.
+
+### Recommended client flow
+
+1. On registration or login success, keep the returned `accessToken` in the application's auth state and use the returned `user`.
+2. On application startup, call `POST /users/refresh` with credentials. If it succeeds, replace the in-memory access token and user with the response values. If it returns `401`, treat the visitor as signed out.
+3. If a protected request returns `401`, attempt one session refresh and retry the original request once if refresh succeeds. If refresh fails, clear auth state and show the signed-out experience. Avoid infinite retry loops.
+4. On logout, call `POST /users/logout` with the current access token, then clear the client auth state whether or not the request succeeds. The server revokes the active tokens; the current logout response does not explicitly clear the browser cookie.
+
+Do not persist the access token in a URL or log it. Keep the refresh token exclusively in the HTTP-only cookie.
+
+### Register
 
 ```http
-Authorization: Bearer eyJhbGciOiJIUzI1Ni...
+POST /users/register
+Content-Type: application/json
 ```
 
-The backend extracts the authenticated user's `publicId` from
-the access token.
-
-The client must not provide another user's `publicId` when
-performing Todo operations.
-
----
-
-# 5. HTTP Status Codes
-
-| Status Code | Meaning                        |
-| ----------- | ------------------------------ |
-| `200`       | Request completed successfully |
-| `201`       | Resource created successfully  |
-| `400`       | Bad request                    |
-| `401`       | Unauthorized                   |
-| `403`       | Forbidden                      |
-| `404`       | Resource not found             |
-| `409`       | Resource conflict              |
-| `422`       | Validation error               |
-| `429`       | Too many requests              |
-| `500`       | Internal server error          |
-
----
-
-# 6. Standard API Response
-
-All APIs should follow a consistent response structure.
-
-## Success Response
-
-```json
-{
-  "success": true,
-  "message": "Operation completed successfully.",
-  "data": {}
-}
-```
-
-## Error Response
-
-```json
-{
-  "success": false,
-  "message": "Something went wrong.",
-  "error": {
-    "code": "ERROR_CODE",
-    "details": []
-  }
-}
-```
-
----
-
-# 7. Authentication API
-
-## 7.1 Register User
-
-Creates a new user account.
-
-### Endpoint
-
-```http
-POST /api/v1/auth/register
-```
-
-### Authentication
-
-```text
-Public
-```
-
-### Request
+Request:
 
 ```json
 {
   "username": "Ayush",
-  "email": "ayush@email.com",
-  "password": "1234r"
+  "email": "ayush@example.com",
+  "password": "choose-a-password"
 }
 ```
 
-### Success Response
+Username, email, and password must be non-empty strings. Email is checked for a basic email format and normalized to lowercase. Username is trimmed; the database column permits up to 50 characters. Password policy beyond non-empty input is not currently enforced by the controller.
 
-**Status:** `201 Created`
+Response: `201 Created`
 
 ```json
 {
   "success": true,
-  "message": "Registration successful.",
-  "data": {
-    "user": {
-      "username": "Ayush",
-      "email": "ayush@email.com",
-      "publicId": "550e8400-e29b-41d4-a716-446655440000"
-    },
-    "accessToken": "eyJhbGciOiJIUzI1Ni..."
-  }
+  "message": "User registered successfully.",
+  "user": {
+    "publicId": "550e8400-e29b-41d4-a716-446655440000",
+    "username": "Ayush",
+    "email": "ayush@example.com",
+    "createdAt": "2026-10-08T10:00:00.000Z"
+  },
+  "accessToken": "<accessToken>"
 }
 ```
 
-### Possible Errors
+The refresh token is set as a cookie and is not included in the JSON body. Existing email returns `409 Conflict`; invalid input returns `400 Bad Request`.
 
-```text
-400 Bad Request
-409 Conflict
-```
-
-Examples:
-
-* Invalid username.
-* Invalid email.
-* Invalid password.
-* Email already exists.
-* Username already exists.
-
----
-
-# 8. Login API
-
-Authenticates an existing user.
-
-## 8.1 Login
-
-### Endpoint
+### Login
 
 ```http
-POST /api/v1/auth/login
-```
-
-### Authentication
-
-```text
-Public
-```
-
-### Request
-
-```json
-{
-  "email": "ayush@email.com",
-  "password": "1234r"
-}
-```
-
-### Success Response
-
-**Status:** `200 OK`
-
-```json
-{
-  "success": true,
-  "message": "Login successful.",
-  "data": {
-    "user": {
-      "username": "Ayush",
-      "email": "ayush@email.com",
-      "publicId": "550e8400-e29b-41d4-a716-446655440000"
-    },
-    "accessToken": "eyJhbGciOiJIUzI1Ni..."
-  }
-}
-```
-
-### Possible Errors
-
-```text
-400 Bad Request
-401 Unauthorized
-```
-
----
-
-# 9. Profile API
-
-Returns the authenticated user's profile.
-
-## 9.1 Get Profile
-
-### Endpoint
-
-```http
-GET /api/v1/auth/profile
-```
-
-### Authentication
-
-```text
-Required
-```
-
-### Headers
-
-```http
-Authorization: Bearer <accessToken>
-```
-
-### Success Response
-
-**Status:** `200 OK`
-
-```json
-{
-  "success": true,
-  "message": "Profile fetched successfully.",
-  "data": {
-    "user": {
-      "username": "Ayush",
-      "email": "ayush@email.com",
-      "publicId": "550e8400-e29b-41d4-a716-446655440000"
-    }
-  }
-}
-```
-
-The API must never return:
-
-```text
-password
-password_hash
-```
-
----
-
-# 10. Logout API
-
-Logs out the authenticated user.
-
-## 10.1 Logout
-
-### Endpoint
-
-```http
-POST /api/v1/auth/logout
-```
-
-### Authentication
-
-```text
-Required
-```
-
-### Headers
-
-```http
-Authorization: Bearer <accessToken>
-```
-
-### Success Response
-
-**Status:** `200 OK`
-
-```json
-{
-  "success": true,
-  "message": "Logout successful."
-}
-```
-
-If refresh tokens or sessions are implemented, the corresponding
-session should also be invalidated.
-
----
-
-# 11. Todo API
-
-Todos belong to the authenticated user.
-
-The backend obtains the user's identity from the access token.
-
-```text
-Access Token
-     |
-     v
-Authentication Middleware
-     |
-     v
-userPublicId
-     |
-     v
-Todo Authorization
-     |
-     v
-MongoDB
-```
-
-The client must not be trusted to provide the ownership identity.
-
----
-
-# 12. Create Todo
-
-Creates a new Todo.
-
-## 12.1 Create Todo
-
-### Endpoint
-
-```http
-POST /api/v1/todos
-```
-
-### Authentication
-
-```text
-Required
-```
-
-### Headers
-
-```http
-Authorization: Bearer <accessToken>
+POST /users/login
 Content-Type: application/json
 ```
 
-### Request
+Request:
 
 ```json
 {
-  "topicName": "Complete AWS deployment",
-  "description": "Deploy the Todo application to AWS."
+  "email": "ayush@example.com",
+  "password": "choose-a-password"
 }
 ```
 
-The following field should **not** be accepted from the client:
+Response: `200 OK`, with the same `user` and `accessToken` shape as registration and a newly set refresh cookie. Missing/invalid fields return `400`; incorrect credentials return `401` with the generic message `Invalid email or password.`
 
-```text
-userPublicId
-```
-
-The backend obtains it from the authenticated user.
-
-### Success Response
-
-**Status:** `201 Created`
-
-```json
-{
-  "success": true,
-  "message": "Todo created successfully.",
-  "data": {
-    "todo": {
-      "id": "66f1a4c2e2...",
-      "topicName": "Complete AWS deployment",
-      "description": "Deploy the Todo application to AWS.",
-      "status": "PENDING",
-      "createdAt": "2026-10-08T10:00:00.000Z",
-      "updatedAt": "2026-10-08T10:00:00.000Z"
-    }
-  }
-}
-```
-
-### Default Status
-
-Every newly created Todo starts with:
-
-```text
-PENDING
-```
-
----
-
-# 13. Get All Todos
-
-Returns Todos belonging to the authenticated user.
-
-## 13.1 Get All Todos
-
-### Endpoint
+### Refresh session
 
 ```http
-GET /api/v1/todos
+POST /users/refresh
 ```
 
-### Authentication
-
-```text
-Required
-```
-
-### Headers
-
-```http
-Authorization: Bearer <accessToken>
-```
-
-### Query Parameters
-
-```text
-page
-limit
-status
-sortBy
-sortOrder
-```
-
-Example:
-
-```http
-GET /api/v1/todos?page=1&limit=20&status=PENDING
-```
-
-### Success Response
-
-**Status:** `200 OK`
+Send the `todo_cookie` automatically with browser credentials; no access-token authorization header is required. On success (`200 OK`), the backend returns a replacement access token and user and rotates the refresh cookie:
 
 ```json
 {
   "success": true,
-  "message": "Todos fetched successfully.",
-  "data": {
-    "todos": [
-      {
-        "id": "66f1a4c2e2...",
-        "topicName": "Complete AWS deployment",
-        "description": "Deploy the Todo application to AWS.",
-        "status": "PENDING",
-        "createdAt": "2026-10-08T10:00:00.000Z",
-        "updatedAt": "2026-10-08T10:00:00.000Z"
-      }
-    ],
-    "pagination": {
-      "page": 1,
-      "limit": 20,
-      "total": 1,
-      "totalPages": 1
-    }
-  }
+  "message": "Session refreshed successfully.",
+  "user": {
+    "publicId": "550e8400-e29b-41d4-a716-446655440000",
+    "username": "Ayush",
+    "email": "ayush@example.com",
+    "createdAt": "2026-10-08T10:00:00.000Z"
+  },
+  "accessToken": "<newAccessToken>"
 }
 ```
 
----
+Missing, expired, or revoked refresh session returns `401 Unauthorized`.
 
-# 14. Get Todo By ID
-
-Returns a specific Todo.
-
-## 14.1 Get Todo
-
-### Endpoint
+### Get profile
 
 ```http
-GET /api/v1/todos/:todoId
-```
-
-### Authentication
-
-```text
-Required
-```
-
-### Headers
-
-```http
+GET /users/profile
 Authorization: Bearer <accessToken>
 ```
 
-### Example
-
-```http
-GET /api/v1/todos/66f1a4c2e2...
-```
-
-### Success Response
-
-**Status:** `200 OK`
+Response: `200 OK`
 
 ```json
 {
   "success": true,
-  "message": "Todo fetched successfully.",
-  "data": {
-    "todo": {
-      "id": "66f1a4c2e2...",
-      "topicName": "Complete AWS deployment",
-      "description": "Deploy the Todo application to AWS.",
-      "status": "PENDING",
-      "createdAt": "2026-10-08T10:00:00.000Z",
-      "updatedAt": "2026-10-08T10:00:00.000Z"
-    }
+  "message": "profile fetched successfully.",
+  "user": {
+    "publicId": "550e8400-e29b-41d4-a716-446655440000",
+    "username": "Ayush",
+    "email": "ayush@example.com",
+    "createdAt": "2026-10-08T10:00:00.000Z"
   }
 }
 ```
 
-The backend must verify that the Todo belongs to the authenticated
-user.
-
----
-
-# 15. Update Todo
-
-Updates Todo information.
-
-## 15.1 Update Todo
-
-### Endpoint
+### Logout
 
 ```http
-PATCH /api/v1/todos/:todoId
-```
-
-### Authentication
-
-```text
-Required
-```
-
-### Headers
-
-```http
+POST /users/logout
 Authorization: Bearer <accessToken>
-Content-Type: application/json
 ```
 
-### Request
-
-```json
-{
-  "topicName": "Complete AWS deployment",
-  "description": "Deploy and verify the Todo application on AWS."
-}
-```
-
-All fields are optional because this is a partial update.
-
-### Success Response
-
-**Status:** `200 OK`
+Response: `200 OK`
 
 ```json
 {
   "success": true,
-  "message": "Todo updated successfully.",
-  "data": {
-    "todo": {
-      "id": "66f1a4c2e2...",
-      "topicName": "Complete AWS deployment",
-      "description": "Deploy and verify the Todo application on AWS.",
-      "status": "PENDING",
-      "updatedAt": "2026-10-08T10:15:00.000Z"
-    }
-  }
+  "message": "logged out successfully."
 }
 ```
 
----
+## 4. Todo data model
 
-# 16. Update Todo Status
+```ts
+type TodoStatus = "Pending" | "Processing" | "Completed";
 
-Updates only the Todo status.
-
-## 16.1 Update Status
-
-### Endpoint
-
-```http
-PATCH /api/v1/todos/:todoId/status
-```
-
-### Authentication
-
-```text
-Required
-```
-
-### Headers
-
-```http
-Authorization: Bearer <accessToken>
-Content-Type: application/json
-```
-
-### Request
-
-```json
-{
-  "status": "FINISHED"
+interface Todo {
+  id: string;
+  topicName: string;
+  description: string;
+  status: TodoStatus;
+  dueAt: string | null;
+  reminderAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 ```
 
-### Allowed Status
+The `id` is a MongoDB ObjectId encoded as a string. A new Todo defaults to `Pending`; `description` defaults to an empty string, and `dueAt` / `reminderAt` default to `null`. Normal Todo reads exclude soft-deleted records. List results are ordered newest first.
 
-```text
-PENDING
-PROCESSING
-FINISHED
-```
+## 5. Todo endpoints
 
-### Success Response
+All Todo routes require `Authorization: Bearer <accessToken>`.
 
-**Status:** `200 OK`
-
-```json
-{
-  "success": true,
-  "message": "Todo status updated successfully.",
-  "data": {
-    "todo": {
-      "id": "66f1a4c2e2...",
-      "topicName": "Complete AWS deployment",
-      "description": "Deploy the Todo application on AWS.",
-      "status": "FINISHED",
-      "updatedAt": "2026-10-08T10:10:00.000Z"
-    }
-  }
-}
-```
-
-`DELETED` is not treated as a normal Todo status.
-
-Deletion is handled through the DELETE endpoint.
-
----
-
-# 17. Delete Todo
-
-Deletes a Todo using soft deletion.
-
-## 17.1 Delete Todo
-
-### Endpoint
+### Create Todo
 
 ```http
-DELETE /api/v1/todos/:todoId
-```
-
-### Authentication
-
-```text
-Required
-```
-
-### Headers
-
-```http
-Authorization: Bearer <accessToken>
-```
-
-### Success Response
-
-**Status:** `200 OK`
-
-```json
-{
-  "success": true,
-  "message": "Todo deleted successfully.",
-  "data": {
-    "todo": {
-      "id": "66f1a4c2e2...",
-      "topicName": "Complete AWS deployment"
-    }
-  }
-}
-```
-
-The Todo is soft deleted by setting:
-
-```text
-deletedAt = current timestamp
-```
-
-Deleted Todos must not appear in normal Todo queries.
-
----
-
-# 18. Todo Statistics API
-
-The frontend requires a graph showing completed versus uncompleted
-Todos.
-
-## 18.1 Get Todo Statistics
-
-### Endpoint
-
-```http
-GET /api/v1/todos/stats
-```
-
-### Authentication
-
-```text
-Required
-```
-
-### Headers
-
-```http
-Authorization: Bearer <accessToken>
-```
-
-### Success Response
-
-**Status:** `200 OK`
-
-```json
-{
-  "success": true,
-  "message": "Todo statistics fetched successfully.",
-  "data": {
-    "total": 20,
-    "completed": 12,
-    "uncompleted": 8
-  }
-}
-```
-
-The statistics may initially be calculated from MongoDB.
-
-Redis can later cache these statistics to reduce repeated database
-queries.
-
----
-
-# 19. Push Notification API
-
-Push notification support requires the backend to store the
-browser/device push subscription associated with the authenticated
-user.
-
----
-
-## 19.1 Register Push Subscription
-
-### Endpoint
-
-```http
-POST /api/v1/notifications/subscriptions
-```
-
-### Authentication
-
-```text
-Required
-```
-
-### Headers
-
-```http
-Authorization: Bearer <accessToken>
-Content-Type: application/json
-```
-
-### Request
-
-```json
-{
-  "endpoint": "https://push-service.example/subscription/...",
-  "keys": {
-    "p256dh": "public-key",
-    "auth": "authentication-key"
-  }
-}
-```
-
-### Success Response
-
-**Status:** `201 Created`
-
-```json
-{
-  "success": true,
-  "message": "Push subscription registered successfully."
-}
-```
-
----
-
-# 20. Remove Push Subscription
-
-Removes a registered browser/device push subscription.
-
-## 20.1 Delete Subscription
-
-### Endpoint
-
-```http
-DELETE /api/v1/notifications/subscriptions/:subscriptionId
-```
-
-### Authentication
-
-```text
-Required
-```
-
-### Headers
-
-```http
-Authorization: Bearer <accessToken>
-```
-
-### Success Response
-
-**Status:** `200 OK`
-
-```json
-{
-  "success": true,
-  "message": "Push subscription removed successfully."
-}
-```
-
----
-
-# 21. WebSocket API
-
-REST APIs handle normal CRUD operations.
-
-WebSocket handles realtime Todo updates.
-
-```text
-REST API
-   |
-   | CRUD
-   v
-MongoDB
-   |
-   | successful mutation
-   v
-Redis Pub/Sub
-   |
-   v
-WebSocket
-   |
-   v
-React Application
-```
-
----
-
-# 22. WebSocket Connection
-
-### Endpoint
-
-```text
-WS /api/v1/ws
-```
-
-The WebSocket connection must be authenticated.
-
-Recommended authentication:
-
-```http
-Authorization: Bearer <accessToken>
-```
-
-The backend should associate the WebSocket connection with the
-authenticated user's `publicId`.
-
----
-
-# 23. WebSocket Events
-
-## 23.1 Todo Created
-
-### Event
-
-```text
-todo.created
-```
-
-### Payload
-
-```json
-{
-  "event": "todo.created",
-  "data": {
-    "todo": {
-      "id": "66f1a4c2e2...",
-      "topicName": "Complete AWS deployment",
-      "description": "Deploy the Todo application.",
-      "status": "PENDING"
-    }
-  }
-}
-```
-
----
-
-## 23.2 Todo Updated
-
-### Event
-
-```text
-todo.updated
-```
-
-### Payload
-
-```json
-{
-  "event": "todo.updated",
-  "data": {
-    "todo": {
-      "id": "66f1a4c2e2...",
-      "status": "FINISHED"
-    }
-  }
-}
-```
-
----
-
-## 23.3 Todo Deleted
-
-### Event
-
-```text
-todo.deleted
-```
-
-### Payload
-
-```json
-{
-  "event": "todo.deleted",
-  "data": {
-    "todoId": "66f1a4c2e2..."
-  }
-}
-```
-
----
-
-# 24. Redux Toolkit / RTK Query Integration
-
-The React frontend should use RTK Query for server state.
-
-Example API structure:
-
-```text
-Redux Toolkit
-|
-+-- RTK Query
-|   |
-|   +-- authApi
-|   +-- todoApi
-|   +-- notificationApi
-|
-+-- Regular Redux Slices
-    |
-    +-- authSlice
-    +-- uiSlice
-    +-- websocketSlice
-```
-
-RTK Query should manage:
-
-* API requests.
-* Loading states.
-* Error states.
-* Server-side caching.
-* Cache invalidation.
-* Todo data synchronization.
-
-Regular Redux slices should manage:
-
-* UI state.
-* Authentication-related client state.
-* WebSocket connection state.
-* Other client-only state.
-
----
-
-# 25. Redis Cache Strategy
-
-Redis is not the source of truth.
-
-```text
-Client
-  |
-  v
-Backend
-  |
-  v
-Redis
-  |
-  +---- Cache HIT
-  |       |
-  |       v
-  |     Response
-  |
-  +---- Cache MISS
-          |
-          v
-       MongoDB
-          |
-          v
-      Redis SET
-          |
-          v
-       Response
-```
-
----
-
-# 26. Todo Cache Key
-
-A Todo cache key can follow this structure:
-
-```text
-todos:user:{userPublicId}:page:{page}:limit:{limit}:status:{status}
-```
-
-Example:
-
-```text
-todos:user:550e8400-e29b-41d4-a716-446655440000:page:1:limit:20:status:ALL
-```
-
----
-
-# 27. Cache Invalidation
-
-Whenever a Todo is:
-
-```text
-Created
-Updated
-Status Updated
-Deleted
-```
-
-the corresponding user Todo cache must be invalidated or updated.
-
-Example:
-
-```text
 POST /todos
-     |
-     v
-MongoDB write
-     |
-     v
-Successful
-     |
-     v
-Redis cache invalidation
-     |
-     v
-Redis Pub/Sub
-     |
-     v
-WebSocket
+Content-Type: application/json
 ```
 
-Database writes must complete successfully before realtime events
-are published.
-
----
-
-# 28. API Authorization
-
-Every protected Todo endpoint must:
-
-1. Validate the access token.
-2. Extract the authenticated user's `publicId`.
-3. Validate the requested Todo ID.
-4. Verify Todo ownership.
-5. Perform the database operation.
-6. Return the appropriate response.
-
-The application must never trust:
+Request:
 
 ```json
 {
-  "userPublicId": "another-user-id"
+  "topicName": "Complete frontend dashboard",
+  "description": "Implement the task dashboard."
 }
 ```
 
-provided by a client.
+`topicName` must contain at least three non-space characters. `description` is optional. Duplicate active Todo titles for the same user return `409 Conflict`. Ownership fields and status are not accepted as client-controlled creation fields.
 
-The backend should use the identity from the authenticated token.
-
-Conceptually:
-
-```text
-findOne({
-  _id: todoId,
-  userPublicId: authenticatedUserPublicId,
-  deletedAt: null
-})
-```
-
-This prevents users from accessing another user's Todos.
-
----
-
-# 29. API Route Summary
-
-## Authentication
-
-```text
-POST   /api/v1/auth/register
-POST   /api/v1/auth/login
-GET    /api/v1/auth/profile
-POST   /api/v1/auth/logout
-```
-
-## Todos
-
-```text
-POST   /api/v1/todos
-GET    /api/v1/todos
-GET    /api/v1/todos/stats
-GET    /api/v1/todos/:todoId
-PATCH  /api/v1/todos/:todoId
-PATCH  /api/v1/todos/:todoId/status
-DELETE /api/v1/todos/:todoId
-```
-
-## Notifications
-
-```text
-POST   /api/v1/notifications/subscriptions
-DELETE /api/v1/notifications/subscriptions/:subscriptionId
-```
-
-## WebSocket
-
-```text
-WS     /api/v1/ws
-```
-
----
-
-# 30. API to Database Mapping
-
-| API Operation          | Primary Database           | Supporting Service |
-| ---------------------- | -------------------------- | ------------------ |
-| Register               | PostgreSQL                 | Redis              |
-| Login                  | PostgreSQL                 | Redis              |
-| Profile                | PostgreSQL                 | Redis              |
-| Logout                 | PostgreSQL / Session Store | Redis              |
-| Create Todo            | MongoDB                    | Redis              |
-| Get All Todos          | MongoDB                    | Redis Cache        |
-| Get Todo               | MongoDB                    | Redis Cache        |
-| Update Todo            | MongoDB                    | Redis              |
-| Update Status          | MongoDB                    | Redis              |
-| Delete Todo            | MongoDB                    | Redis              |
-| Todo Statistics        | MongoDB                    | Redis Cache        |
-| Push Subscription      | PostgreSQL                 | -                  |
-| WebSocket Coordination | -                          | Redis Pub/Sub      |
-
----
-
-# 31. Error Handling
-
-The API should use consistent error codes.
-
-Example:
+Response: `201 Created`
 
 ```json
 {
-  "success": false,
-  "message": "Todo not found.",
-  "error": {
-    "code": "TODO_NOT_FOUND",
-    "details": []
+  "success": true,
+  "message": "todo created successfully.",
+  "todo": {
+    "id": "66f1a4c2e2...",
+    "topicName": "Complete frontend dashboard",
+    "description": "Implement the task dashboard.",
+    "status": "Pending"
   }
 }
 ```
 
-Recommended error codes:
+**Important:** The create response currently omits `dueAt`, `reminderAt`, `createdAt`, and `updatedAt`. If the UI needs the complete canonical object, refresh the list or fetch the Todo after creation.
 
-```text
-VALIDATION_ERROR
-INVALID_CREDENTIALS
-UNAUTHORIZED
-FORBIDDEN
-USER_NOT_FOUND
-EMAIL_ALREADY_EXISTS
-USERNAME_ALREADY_EXISTS
-TODO_NOT_FOUND
-TODO_ACCESS_DENIED
-INVALID_TODO_STATUS
-NOTIFICATION_SUBSCRIPTION_NOT_FOUND
-RATE_LIMIT_EXCEEDED
-INTERNAL_SERVER_ERROR
+### List Todos
+
+```http
+GET /todos
 ```
 
----
+Response: `200 OK`
 
-# 32. Validation Rules
-
-## User
-
-```text
-username
-    - required
-    - string
-    - unique
-
-email
-    - required
-    - valid email
-    - unique
-
-password
-    - required
-    - minimum length
-    - stored only as a password hash
+```json
+{
+  "success": true,
+  "message": "todos fetched successfully.",
+  "todos": [
+    {
+      "id": "66f1a4c2e2...",
+      "topicName": "Complete frontend dashboard",
+      "description": "Implement the task dashboard.",
+      "status": "Pending",
+      "dueAt": null,
+      "reminderAt": null,
+      "createdAt": "2026-10-08T10:00:00.000Z",
+      "updatedAt": "2026-10-08T10:00:00.000Z"
+    }
+  ]
+}
 ```
 
-## Todo
+An empty collection is returned as `"todos": []`. The current endpoint does not implement query parameters, pagination, filtering, or sorting controls; it returns all active Todos for the authenticated user, newest first.
 
-```text
-topicName
-    - required
-    - string
+### Get one Todo
 
-description
-    - optional
-    - string
-
-status
-    - PENDING
-    - PROCESSING
-    - FINISHED
+```http
+GET /todos/:todoId
 ```
 
----
+Response: `200 OK`
 
-# 33. Security Requirements
-
-The API must follow these security rules:
-
-* Passwords must never be stored as plaintext.
-* Passwords must be hashed before being stored in PostgreSQL.
-* Password hashes must never be returned through the API.
-* Authentication middleware must protect private routes.
-* Todo ownership must be checked on every Todo operation.
-* Client-provided `userPublicId` must not be trusted.
-* Input validation must happen before database operations.
-* MongoDB queries must validate user ownership.
-* Rate limiting should be applied to authentication endpoints.
-* Sensitive configuration must be stored in environment variables.
-* JWT/access-token secrets must never be committed to Git.
-* CORS must be configured explicitly.
-* Production traffic should use HTTPS/WSS.
-
----
-
-# 34. Realtime Data Flow
-
-When a user creates a Todo:
-
-```text
-React
-  |
-  | POST /api/v1/todos
-  v
-Node.js API
-  |
-  v
-MongoDB
-  |
-  | Successful database write
-  v
-Redis
-  |
-  +---- Invalidate Todo Cache
-  |
-  +---- Publish todo.created
-              |
-              v
-         WebSocket
-              |
-              v
-       Connected Clients
-              |
-              v
-        RTK Query Cache
+```json
+{
+  "success": true,
+  "message": "todo fetched successfully.",
+  "todo": {
+    "id": "66f1a4c2e2...",
+    "topicName": "Complete frontend dashboard",
+    "description": "Implement the task dashboard.",
+    "status": "Pending",
+    "dueAt": null,
+    "reminderAt": null,
+    "createdAt": "2026-10-08T10:00:00.000Z",
+    "updatedAt": "2026-10-08T10:00:00.000Z"
+  }
+}
 ```
 
-The same pattern applies to:
+An invalid ObjectId returns `400`; a missing, deleted, or other user's Todo returns `404`.
 
-```text
-Todo Created
-Todo Updated
-Todo Status Updated
-Todo Deleted
+### Edit Todo fields
+
+```http
+PATCH /todos/:todoId
+Content-Type: application/json
 ```
 
----
+Provide one or more editable fields:
 
-# 35. API Design Principles
+```json
+{
+  "topicName": "Complete the frontend dashboard",
+  "description": "Add the task list and summary chart.",
+  "dueAt": "2026-10-10T18:00:00.000Z",
+  "reminderAt": null
+}
+```
 
-The API follows these principles:
+Supported fields:
 
-* PostgreSQL is the source of truth for user identity and
-  authentication.
-* MongoDB is the source of truth for Todo data.
-* Redis is a cache and realtime coordination layer.
-* REST is used for standard CRUD operations.
-* WebSocket is used for realtime updates.
-* Authentication uses Bearer access tokens.
-* Todo ownership comes from the authenticated identity.
-* Todo deletion uses soft deletion.
-* Deleted Todos are excluded from normal queries.
-* Todo list endpoints support pagination.
-* Todo list endpoints can support status filtering.
-* API responses follow a consistent response structure.
-* API routes are versioned using `/api/v1`.
-* Database writes complete before realtime events are published.
-* Redis cache is invalidated after successful mutations.
-* RTK Query manages frontend server state.
-* Regular Redux slices manage client-side application state.
+| Field | Type | Behavior |
+|---|---|---|
+| `topicName` | string | Trimmed; must contain at least three characters |
+| `description` | string | Trimmed |
+| `dueAt` | ISO date string or `null` | `null` clears the date |
+| `reminderAt` | ISO date string or `null` | `null` clears the date |
+
+Fields are optional, but an empty body or a body with no supported fields returns `400`. Status is changed through the dedicated status route, not this route.
+
+Response: `200 OK`, with the updated full Todo in the `todo` property. Invalid dates or invalid title return `400`; a missing/deleted/non-owned Todo returns `404`.
+
+### Change Todo status
+
+```http
+PATCH /todos/:todoId/status
+Content-Type: application/json
+```
+
+Request:
+
+```json
+{
+  "status": "Completed"
+}
+```
+
+Allowed values are exactly `"Pending"`, `"Processing"`, and `"Completed"` (case-sensitive). Response: `200 OK`, with the updated full Todo in `todo`. An invalid status returns `400`.
+
+### Delete Todo
+
+```http
+DELETE /todos/:todoId/delete
+```
+
+This endpoint soft-deletes the Todo. Deleted Todos no longer appear in list, detail, and statistics responses.
+
+Response: `200 OK`
+
+```json
+{
+  "success": true,
+  "message": "todo deleted successfully."
+}
+```
+
+There is no `todo` object in the delete response. A missing, deleted, or non-owned Todo returns `404`.
+
+### Get Todo statistics
+
+```http
+GET /todos/stats
+```
+
+Response: `200 OK`
+
+```json
+{
+  "success": true,
+  "message": "todo statistics fetched successfully.",
+  "stats": {
+    "total": 3,
+    "pending": 1,
+    "processing": 1,
+    "completed": 1
+  }
+}
+```
+
+Counts are scoped to the current user and exclude deleted Todos. An account with no active Todos receives zero for each count.
+
+## 6. Frontend client setup
+
+The existing frontend uses Axios, Redux Toolkit async thunks, and Redux slices for server/client state. It does not currently use RTK Query.
+
+The Axios client should use a base URL ending in `/api/v1`, JSON headers, a request timeout, and browser credentials:
+
+```ts
+import axios from "axios";
+
+export const api = axios.create({
+  baseURL: import.meta.env.VITE_BACKEND_URI,
+  headers: { "Content-Type": "application/json" },
+  withCredentials: true,
+  timeout: 15_000,
+});
+```
+
+For protected calls, attach the current access token:
+
+```ts
+const response = await api.get("/todos", {
+  headers: { Authorization: `Bearer ${accessToken}` },
+});
+const todos = response.data.todos;
+```
+
+For unauthenticated calls, such as login and registration, do not add an Authorization header. Keep `withCredentials: true` so the server can set the refresh cookie. For refresh, credentials must be included so the browser sends that cookie.
+
+Use the response's top-level resource property when decoding data:
+
+```ts
+const created = response.data.todo;
+const currentUser = response.data.user;
+const counts = response.data.stats;
+```
+
+Do not expect RTK Query tags, `data` envelopes, or server pagination metadata from these routes.
+
+## 7. State, loading, and UI behavior
+
+Recommended state separation:
+
+- Keep the current user and access token in auth state.
+- Keep Todo collections and statistics in Todo/server state.
+- Keep transient UI state (dialogs, selected filters that are client-only, form state) in component or UI state.
+- Track loading and error state per operation where practical, so a failed status update does not replace the whole page with a generic error.
+
+For asynchronous operations, the UI should:
+
+1. Show an initial loading state while fetching the list/profile/statistics.
+2. Show an empty state when the successful list response contains no Todos.
+3. Disable or indicate the affected control while a create/update/delete request is pending.
+4. On mutation success, use the returned `todo` where available and refresh the list and statistics when those views need authoritative values. For create, the response omits timestamps and date fields, so refresh if the UI relies on them.
+5. On failure, preserve user input where possible and show a useful message without exposing stack traces or tokens.
+
+The current frontend follows the async-thunk pattern and extracts `response.data.todos`, `response.data.todo`, and `response.data.stats`.
+
+## 8. Errors and status handling
+
+| HTTP status | Frontend handling |
+|---|---|
+| `400` | Show validation/input feedback; check field values, date strings, status casing, or Todo ID |
+| `401` | Refresh the session once for protected calls; otherwise clear auth state and require login |
+| `404` | Treat the Todo as unavailable; refresh the list and show a non-blocking message |
+| `409` | Show a conflict message (duplicate email or active Todo title) |
+| `5xx` | Show a generic retryable server error; do not expose diagnostics |
+
+The global error handler returns `{ success: false, status, message }`. In non-production it may add an `error` object containing diagnostic details. Error messages are user-facing text, not stable identifiers; avoid brittle UI branching on their exact wording.
+
+Network failures have no HTTP response. Distinguish those from server responses and provide a connection/retry message. The frontend Axios client currently has a 15-second timeout.
+
+## 9. Features not currently available
+
+These are not part of the current HTTP/WebSocket contract:
+
+- `POST /notifications/subscriptions` and subscription deletion.
+- WebSocket connection endpoint or `todo.created` / `todo.updated` / `todo.deleted` events.
+- Query parameters for pagination, status filtering, sorting, or search.
+- Password reset, email verification, or a separate user update endpoint.
+
+Do not assume these APIs exist based on older design notes. The current backend mounts only `/users` and `/todos` routes below `/api/v1`.
+
+## 10. CORS and deployment checklist
+
+- Set `VITE_BACKEND_URI` to the reachable backend origin plus `/api/v1`.
+- Set backend `CORS_ORIGIN` to the exact frontend origin (scheme, host, and port); credentialed browser requests cannot use a wildcard origin.
+- Use HTTPS for the frontend and backend in production so the refresh cookie is sent with its secure setting.
+- Keep `withCredentials: true` in the browser client.
+- Send the access token only in the `Authorization: Bearer ...` header.
+- Never include secrets or tokens in frontend source control, URLs, analytics, or logs.
+- Use the actual API response types: registration/login/profile return `user`; Todo routes return `todo` or `todos`; statistics return `stats`.

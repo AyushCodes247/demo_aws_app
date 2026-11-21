@@ -1,6 +1,6 @@
 import { Types } from "mongoose";
 import { AppError } from "@utils/essential.util.js";
-import { Todo } from "@models/todo.model.js";
+import { Todo, type ITodo } from "@models/todo.model.js";
 import {
   getCachedTodoList,
   cacheTodoList,
@@ -53,7 +53,7 @@ class ToDoService {
     }
   }
 
-  private toResponse(todo): TodoResponse {
+  private toResponse(todo: ITodo): TodoResponse {
     return {
       id: String(todo._id),
       topicName: todo.topicName,
